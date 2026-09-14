@@ -79,11 +79,10 @@
             display: flex;
             flex-direction: column;
             gap: 16px;
-            /* Hiệu ứng trượt mượt mà khi ẩn/hiện */
             transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
         }
 
-        /* Class thêm vào khi bấm ẩn UI */
+        /* Ẩn bảng điều khiển */
         #controls.hidden {
             transform: translate(-50%, 150%);
             opacity: 0;
@@ -146,6 +145,7 @@
 </head>
 <body>
 
+    <!-- Thêm id để gọi video, giữ nguyên các thuộc tính autoplay, playsinline cho iOS -->
     <video id="camera-feed" autoplay playsinline muted></video>
     <img id="tracing-image" src="" alt="">
 
@@ -183,20 +183,35 @@
         const toggleBtn = document.getElementById('toggle-ui-btn');
         const controls = document.getElementById('controls');
 
+        // Hàm khởi động Camera an toàn hơn cho Safari
         async function startCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert("Lỗi: Trình duyệt không hỗ trợ Camera hoặc link chưa có HTTPS.");
+                return;
+            }
+
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: { ideal: "environment" } },
                     audio: false
                 });
+                
                 video.srcObject = stream;
+                
+                // Ép iOS chạy video khi luồng dữ liệu đã sẵn sàng
+                video.onloadedmetadata = () => {
+                    video.play();
+                };
+
             } catch (err) {
-                alert("Vui lòng đảm bảo bạn đang mở link từ Vercel (HTTPS) và đã cho phép Safari dùng Camera.");
+                alert(`Không mở được Camera. Lỗi: ${err.name} - ${err.message}`);
             }
         }
         
-        startCamera();
+        // Đảm bảo trang tải xong toàn bộ HTML/CSS mới gọi Camera
+        window.addEventListener('load', startCamera);
 
+        // Xử lý nạp ảnh
         uploadBtn.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
@@ -205,6 +220,7 @@
             }
         });
 
+        // Xử lý trượt Opacity
         slider.addEventListener('input', (e) => {
             const val = e.target.value;
             img.style.opacity = val;
@@ -220,7 +236,6 @@
                 toggleBtn.style.borderColor = '#00FF00';
                 toggleBtn.style.color = '#00FF00';
                 toggleBtn.style.boxShadow = '0 4px 12px rgba(0, 255, 0, 0.2)';
-                // Đổi sang icon Nhắm mắt
                 toggleBtn.innerHTML = `
                     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
@@ -231,7 +246,6 @@
                 toggleBtn.style.borderColor = '#00B4FF';
                 toggleBtn.style.color = '#00B4FF';
                 toggleBtn.style.boxShadow = '0 4px 12px rgba(0, 180, 255, 0.2)';
-                // Đổi lại icon Mở mắt
                 toggleBtn.innerHTML = `
                     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
