@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Tracing</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Archivo Narrow', system-ui, sans-serif;
+        }
+
+        /* Lớp Camera */
+        #camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+        }
+
+        /* Lớp Ảnh */
+        #tracing-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            z-index: 2;
+            opacity: 0.5; /* Mặc định trong suốt 50% */
+            pointer-events: none; /* Tránh block thao tác vuốt */
+        }
+
+        /* Bảng điều khiển */
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(20, 20, 20, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid #00B4FF;
+            border-radius: 16px;
+            padding: 16px 20px;
+            width: 85%;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            color: #E2E8F0;
+            font-size: 14px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="file"] {
+            color: #94A3B8;
+            font-size: 14px;
+        }
+
+        input[type="file"]::file-selector-button {
+            background-color: #00B4FF;
+            color: #000;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-right: 12px;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 22px;
+            width: 22px;
+            border-radius: 50%;
+            background: #00FF00;
+            cursor: pointer;
+            margin-top: -9px;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Camera chạy ẩn phía sau -->
+    <video id="camera-feed" autoplay playsinline muted></video>
+    
+    <!-- Ảnh mẫu nằm đè lên trên -->
+    <img id="tracing-image" src="" alt="">
+
+    <!-- Cụm điều khiển ở dưới đáy -->
+    <div id="controls">
+        <div class="control-group">
+            <label>CHỌN ẢNH MẪU</label>
+            <input type="file" id="image-upload" accept="image/*">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                <span>ĐỘ TRONG SUỐT</span>
+                <span id="opacity-val">50%</span>
+            </label>
+            <!-- Trượt từ 0.1 (rất mờ) đến 1.0 (rõ hoàn toàn) -->
+            <input type="range" id="opacity-slider" min="0.1" max="1.0" step="0.05" value="0.5">
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('camera-feed');
+        const img = document.getElementById('tracing-image');
+        const uploadBtn = document.getElementById('image-upload');
+        const slider = document.getElementById('opacity-slider');
+        const opVal = document.getElementById('opacity-val');
+
+        // Bật Camera sau
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: "environment" } },
+                    audio: false
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                alert("Vui lòng đảm bảo bạn đang mở link từ Vercel (HTTPS) và đã cho phép Safari dùng Camera.");
+            }
+        }
+        
+        // Khởi động camera ngay khi load trang
+        startCamera();
+
+        // Xử lý nạp ảnh mẫu cực nhanh bằng Object URL
+        uploadBtn.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                // Giải phóng bộ nhớ của ảnh cũ nếu có
+                if (img.src) {
+                    URL.revokeObjectURL(img.src);
+                }
+                img.src = URL.createObjectURL(file);
+            }
+        });
+
+        // Xử lý sự kiện kéo thanh trượt điều chỉnh Opacity
+        slider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            img.style.opacity = val;
+            opVal.textContent = Math.round(val * 100) + '%';
+        });
+    </script>
+</body>
+</html>
