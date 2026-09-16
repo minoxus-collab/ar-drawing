@@ -2,391 +2,925 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
+    <!-- Cấm user scale trang mặc định của trình duyệt để xử lý đa điểm thủ công -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>AR Tracing Workspace</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Archivo+Narrow:ital,wght@0,400..700;1,400..700&display=swap');
+    <title>AR Tracing - Vanilla JS</title>
+    
+    <!-- Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@400;600&display=swap" rel="stylesheet">
 
-        /* Chặn mọi hành vi cuộn/kéo trang của Safari */
+    <style>
+        /* === CSS RESET & VARIABLES === */
+        :root {
+            --accent-cyan: #00B4FF;
+            --accent-green: #00FF00;
+            --bg-dark: #000000;
+            --bg-panel: rgba(20, 20, 20, 0.85);
+            --text-color: #FFFFFF;
+            --font-main: 'Archivo Narrow', sans-serif;
+            --safe-bottom: env(safe-area-inset-bottom, 20px);
+            --safe-top: env(safe-area-inset-top, 20px);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+        
         body, html {
-            margin: 0; padding: 0;
             width: 100%; height: 100%;
+            background-color: var(--bg-dark);
+            color: var(--text-color);
+            font-family: var(--font-main);
             overflow: hidden;
-            background-color: #111;
-            font-family: 'Archivo Narrow', system-ui, sans-serif;
-            touch-action: none; 
             overscroll-behavior: none;
         }
 
-        /* Lớp 1: Camera Feed */
-        #camera-feed {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 100%;
-            object-fit: cover;
-            z-index: 1;
+        /* === 1. MÀN CHỜ === */
+        #intro-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: var(--bg-dark); z-index: 9999; transition: opacity 0.3s;
+        }
+        #intro-screen h1 { font-size: 2.5rem; margin-bottom: 30px; letter-spacing: 2px; color: var(--accent-cyan); }
+        .btn-large {
+            position: relative; overflow: hidden;
+            background: transparent; border: 2px solid var(--accent-cyan);
+            color: var(--accent-cyan); font-size: 1.2rem; font-family: var(--font-main);
+            padding: 15px 40px; border-radius: 30px; cursor: pointer; text-transform: uppercase;
+        }
+        .btn-large input[type="file"] {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0; cursor: pointer;
         }
 
-        /* Lớp 2: Khung giấy & Lưới thước đo */
-        #paper-grid {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            border: 2px solid #00B4FF;
-            background-image: 
-                linear-gradient(rgba(0, 180, 255, 0.3) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 180, 255, 0.3) 1px, transparent 1px);
-            background-size: 10% 10%;
-            z-index: 2;
-            pointer-events: none;
-            display: none;
-            transition: all 0.3s ease;
+        /* === 2. CAMERA & WORKSPACE === */
+        #app-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none;
         }
-
-        /* Hiệu ứng khi KHÓA TRỤC */
-        #paper-grid.locked {
-            border: 3px solid #00FF00;
-            background-image: none; /* Ẩn lưới thừa bên trong */
-            box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
+        #camera-view {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; z-index: 1;
         }
-
-        /* Lớp 3: Ảnh Mẫu */
-        #tracing-image {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 100%;
-            object-fit: contain;
-            z-index: 3;
-            opacity: 0.5;
-            pointer-events: none;
+        #workspace {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2; touch-action: none; overflow: hidden;
+        }
+        
+        /* Cấu trúc các lớp nội dung đè lên camera */
+        .layer {
+            position: absolute; top: 50%; left: 50%;
+            /* transform-origin: center center mặc định */
             transform-origin: center center;
             will-change: transform;
         }
+        #image-layer img {
+            display: block; max-width: 80vw; max-height: 80vh; pointer-events: none;
+            transition: filter 0.2s, opacity 0.2s;
+        }
+        #grid-layer svg {
+            display: block; overflow: visible; pointer-events: none;
+        }
+        .grid-outline { fill: none; stroke: rgba(255, 255, 255, 0.5); stroke-width: 2; transition: all 0.3s; }
+        .grid-lines { fill: none; stroke: rgba(255, 255, 255, 0.3); stroke-width: 1; transition: opacity 0.3s; }
 
-        /* Lớp 4: Tấm nền bắt chạm cảm ứng */
-        #touch-area {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 100%;
-            z-index: 4;
-            pointer-events: none; /* Bật/tắt bằng JS */
+        /* Trạng thái Khóa */
+        body.locked .grid-outline { stroke: var(--accent-green); stroke-width: 4; filter: drop-shadow(0 0 8px var(--accent-green)); }
+        body.locked .grid-lines { opacity: 0; }
+        
+        /* === 3. GIAO DIỆN UI TỔNG === */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; transition: opacity 0.3s; }
+        #ui-layer.hidden { opacity: 0; pointer-events: none !important; }
+        
+        /* Các thành phần UI có thể nhận sự kiện chạm */
+        .interactive-ui { pointer-events: auto; }
+
+        /* Nút Mắt (Ẩn/hiện UI) */
+        #btn-eye {
+            position: absolute; top: var(--safe-top); right: 20px;
+            width: 44px; height: 44px; background: rgba(0,0,0,0.5); border-radius: 50%;
+            display: flex; justify-content: center; align-items: center; border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); cursor: pointer;
+        }
+        body.ui-hidden #btn-eye { opacity: 0.3; pointer-events: auto !important; z-index: 20; }
+        body.ui-hidden #ui-layer:not(#btn-eye-container) > *:not(#btn-eye) { display: none !important; }
+        
+        /* Nút Mở Khóa (Chỉ hiện khi bị khóa) */
+        #btn-unlock {
+            position: absolute; top: var(--safe-top); left: 50%; transform: translateX(-50%);
+            padding: 10px 20px; background: var(--bg-panel); border: 2px solid var(--accent-green);
+            color: var(--accent-green); border-radius: 25px; display: none; align-items: center; gap: 8px;
+            font-weight: 600; text-transform: uppercase; z-index: 20; pointer-events: auto;
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        }
+        body.locked #btn-unlock { display: flex; }
+        body.locked #btn-eye { display: none; }
+
+        /* === 4. TABS & PANELS TẠI ĐÁY === */
+        #bottom-ui {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            display: flex; flex-direction: column; align-items: center;
         }
 
-        /* UI: Bảng Điều Khiển chung */
+        /* Bộ chọn đối tượng (Nằm trên tab bar) */
+        #target-selector {
+            display: flex; background: var(--bg-panel); border-radius: 25px; padding: 4px; margin-bottom: 15px;
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1);
+        }
+        .target-btn {
+            padding: 10px 20px; color: #888; font-family: var(--font-main); font-size: 0.9rem;
+            background: transparent; border: none; border-radius: 20px; cursor: pointer; transition: all 0.2s;
+        }
+        .target-btn.active { background: rgba(255,255,255,0.1); color: var(--accent-cyan); font-weight: 600; }
+
+        /* Vùng chứa Panels (Trượt lên/xuống) */
+        #panels-container {
+            width: 100%; position: relative; height: 0; display: flex; justify-content: center;
+        }
         .panel {
-            position: absolute;
-            bottom: 30px; left: 50%;
-            transform: translateX(-50%);
-            z-index: 10;
-            background: rgba(15, 15, 15, 0.85);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid #00B4FF;
-            border-radius: 12px;
-            padding: 16px 20px;
-            width: 85%;
-            max-width: 400px;
-            display: flex; flex-direction: column; gap: 16px;
+            position: absolute; bottom: 0; width: 95%; max-width: 400px;
+            background: var(--bg-panel); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+            border-radius: 20px 20px 0 0; border: 1px solid rgba(255,255,255,0.1); border-bottom: none;
+            padding: 20px; padding-bottom: calc(70px + var(--safe-bottom)); /* Nhường chỗ cho tab bar */
+            transform: translateY(100%); transition: transform 0.25s cubic-bezier(0.1, 0.9, 0.2, 1);
+            visibility: hidden; display: flex; flex-direction: column; gap: 15px;
         }
+        .panel.open { transform: translateY(0); visibility: visible; }
 
-        .hidden { display: none !important; }
-        .control-group { display: flex; flex-direction: column; gap: 8px; }
-        .row-buttons { display: flex; gap: 8px; justify-content: space-between; }
-
-        label {
-            color: #E2E8F0; font-size: 14px; font-weight: 600;
-            display: flex; justify-content: space-between;
-            text-transform: uppercase; letter-spacing: 0.5px;
+        /* Thanh Tabs Đáy */
+        #tab-bar {
+            width: 100%; height: calc(60px + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
+            background: rgba(10, 10, 10, 0.9); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-around; align-items: center;
+            z-index: 12;
         }
-
-        select {
-            background: rgba(0, 0, 0, 0.5); color: #00B4FF;
-            border: 1px solid #00B4FF; padding: 8px;
-            border-radius: 8px; font-family: 'Archivo Narrow', sans-serif;
-            font-size: 14px; outline: none;
-            text-align: center;
+        .tab-btn {
+            width: 60px; height: 60px; display: flex; justify-content: center; align-items: center;
+            background: transparent; border: none; color: #888; cursor: pointer; transition: all 0.2s;
         }
+        .tab-btn svg { width: 26px; height: 26px; fill: currentColor; }
+        .tab-btn.active { color: var(--accent-cyan); filter: drop-shadow(0 0 5px rgba(0, 180, 255, 0.5)); }
+        #btn-lock { color: #555; }
+        #btn-lock svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;}
+        #btn-lock:active { color: var(--accent-green); }
 
-        button {
-            font-family: 'Archivo Narrow', sans-serif;
-            background: transparent; color: #00B4FF;
-            border: 1px solid #00B4FF; padding: 10px 12px;
-            border-radius: 8px; font-weight: bold;
-            font-size: 13px; cursor: pointer; flex: 1;
-            text-transform: uppercase; transition: 0.2s;
+        /* === 5. CÁC THÀNH PHẦN TRONG PANEL === */
+        /* Row chứa nút Icon + Chữ */
+        .icon-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
+        .icon-btn {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;
+            padding: 10px; flex: 1 1 20%; min-width: 60px; cursor: pointer; color: #CCC; font-size: 0.75rem;
         }
+        .icon-btn svg { width: 24px; height: 24px; fill: currentColor; }
+        .icon-btn:active, .icon-btn.active { background: rgba(0, 180, 255, 0.15); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+        .icon-btn.danger:active { background: rgba(255, 0, 0, 0.15); border-color: #ff4444; color: #ff4444; }
+        
+        /* Thanh trượt (Slider) */
+        .slider-group { display: flex; flex-direction: column; gap: 5px; }
+        .slider-group label { font-size: 0.85rem; color: #AAA; display: flex; justify-content: space-between; }
+        input[type=range] {
+            -webkit-appearance: none; width: 100%; background: transparent; height: 30px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
+            background: var(--accent-cyan); cursor: pointer; margin-top: -8px; box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: rgba(255,255,255,0.2); border-radius: 2px;
+        }
+        
+        /* Nút Khổ Giấy */
+        .paper-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .paper-btn {
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+            padding: 10px 5px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;
+        }
+        .paper-btn .shape { border: 1px solid #888; border-radius: 2px; }
+        /* Tỷ lệ minh họa icon */
+        .shape.a-v { width: 18px; height: 25px; } 
+        .shape.a-h { width: 25px; height: 18px; }
+        .paper-btn span { font-size: 0.75rem; color: #AAA; }
+        .paper-btn.active { border-color: var(--accent-cyan); background: rgba(0,180,255,0.1); }
+        .paper-btn.active .shape { border-color: var(--accent-cyan); }
+        .paper-btn.active span { color: var(--accent-cyan); }
 
-        button:active { background: rgba(0, 180, 255, 0.2); }
-        .btn-primary { color: #00FF00; border-color: #00FF00; }
-        .btn-primary:active { background: rgba(0, 255, 0, 0.2); }
-
-        input[type="file"] { color: #94A3B8; font-size: 14px; width: 100%; }
-        input[type="file"]::file-selector-button {
-            background-color: transparent; color: #00B4FF;
-            border: 1px solid #00B4FF; padding: 8px 16px;
-            border-radius: 8px; font-weight: bold; cursor: pointer;
-            margin-right: 12px; font-family: 'Archivo Narrow', sans-serif;
-        }
-
-        input[type="range"] { -webkit-appearance: none; width: 100%; background: transparent; }
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 20px; width: 20px;
-            border-radius: 50%; background: #00FF00; cursor: pointer;
-            margin-top: -8px; box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
-        }
-        input[type="range"]::-webkit-slider-runnable-track {
-            width: 100%; height: 4px; background: rgba(0, 180, 255, 0.3); border-radius: 2px;
-        }
-
-        /* UI: Nút Unlock (Góc phải dưới) */
-        #btn-unlock-corner {
-            position: absolute;
-            bottom: 20px; right: 20px;
-            z-index: 20;
-            background: rgba(15, 15, 15, 0.6);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-            border: 1px solid rgba(0, 255, 0, 0.5);
-            color: rgba(0, 255, 0, 0.8);
-            padding: 10px 16px;
-            border-radius: 8px;
-            font-size: 12px;
-            opacity: 0.5;
-            transition: opacity 0.3s;
-        }
-        #btn-unlock-corner:active { opacity: 1; }
+        /* Glow cho đối tượng đang chọn */
+        .target-active-glow { filter: drop-shadow(0 0 5px var(--accent-cyan)); }
+        
+        /* Input file ẩn trong tab */
+        #hidden-file-input { display: none; }
+        
     </style>
 </head>
 <body>
 
-    <video id="camera-feed" autoplay playsinline muted></video>
-    <div id="paper-grid"></div>
-    <img id="tracing-image" src="" alt="">
-    <div id="touch-area"></div>
-
-    <!-- 1. TRẠNG THÁI KHỞI TẠO -->
-    <div id="panel-init" class="panel">
-        <div class="control-group">
-            <label>CHỌN ẢNH MẪU</label>
-            <input type="file" id="image-upload" accept="image/*">
+    <!-- === 1. MÀN CHỜ === -->
+    <div id="intro-screen">
+        <h1>AR TRACING</h1>
+        <div class="btn-large">
+            <span>Chọn ảnh mẫu</span>
+            <input type="file" id="init-file-input" accept="image/*">
         </div>
-        <div class="control-group">
-            <label><span>ĐỘ TRONG SUỐT</span><span id="opacity-val">50%</span></label>
-            <input type="range" id="opacity-slider" min="0.1" max="1.0" step="0.05" value="0.5">
-        </div>
-        <button id="btn-enter-align" style="margin-top: 5px;">👁️ MỞ CĂN CHỈNH</button>
+        <p style="margin-top:20px; color:#666; font-size: 0.9rem; text-align:center; padding: 0 20px;">
+            Mẹo: Cấp quyền Camera khi được hỏi.<br>Đặt điện thoại lên giá đỡ cao để chiếu ảnh xuống bàn.
+        </p>
     </div>
 
-    <!-- 2. TRẠNG THÁI CĂN CHỈNH -->
-    <div id="panel-align" class="panel hidden">
-        <div class="control-group" style="margin-bottom: 5px;">
-            <label>CHỌN KHỔ GIẤY THỰC TẾ</label>
-            <!-- Sử dụng data-attribute để điều khiển kích thước lưới -->
-            <select id="paper-size-select">
-                <optgroup label="Khổ Ngang (Landscape)">
-                    <option value="A3-L" data-ratio="1.414/1" data-width="98" data-maxh="85">A3 Khổ Ngang</option>
-                    <option value="A4-L" data-ratio="1.414/1" data-width="90" data-maxh="70">A4 Khổ Ngang</option>
-                    <option value="A5-L" data-ratio="1.414/1" data-width="75" data-maxh="60">A5 Khổ Ngang</option>
-                </optgroup>
-                <optgroup label="Khổ Dọc (Portrait)">
-                    <option value="A3-P" data-ratio="1/1.414" data-width="95" data-maxh="85">A3 Khổ Dọc</option>
-                    <option value="A4-P" data-ratio="1/1.414" data-width="80" data-maxh="80" selected>A4 Khổ Dọc</option>
-                    <option value="A5-P" data-ratio="1/1.414" data-width="65" data-maxh="70">A5 Khổ Dọc</option>
-                </optgroup>
-            </select>
+    <!-- === 2 & 3. WORKSPACE (CAMERA + LỚP NỘI DUNG) === -->
+    <div id="app-container">
+        <!-- Thuộc tính playsinline, webkit-playsinline bắt buộc để tránh bung fullscreen trên iOS -->
+        <video id="camera-view" autoplay playsinline webkit-playsinline muted></video>
+        
+        <div id="workspace">
+            <!-- Lớp Lưới -->
+            <div id="grid-layer" class="layer target-active-glow">
+                <!-- SVG tạo động qua JS -->
+            </div>
+            
+            <!-- Lớp Ảnh -->
+            <div id="image-layer" class="layer">
+                <img id="trace-image" src="" alt="Mẫu">
+            </div>
         </div>
-        <div class="row-buttons">
-            <button id="btn-rotate">Xoay 90°</button>
-            <button id="btn-flip-h">Lật Ngang</button>
-            <button id="btn-flip-v">Lật Dọc</button>
-        </div>
-        <div class="row-buttons" style="margin-top: 10px;">
-            <button id="btn-back-init">⬅ HỦY</button>
-            <button id="btn-lock" class="btn-primary">🔒 KHÓA TRỤC</button>
+
+        <!-- === UI TỔNG === -->
+        <div id="ui-layer">
+            
+            <!-- Nút Mắt (Ẩn hiện UI) -->
+            <div id="btn-eye" class="interactive-ui">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </div>
+
+            <!-- Nút Mở Khóa -->
+            <button id="btn-unlock" class="interactive-ui">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                MỞ KHÓA
+            </button>
+
+            <!-- Giao diện đáy -->
+            <div id="bottom-ui">
+                <!-- Bộ chọn đối tượng -->
+                <div id="target-selector" class="interactive-ui">
+                    <button class="target-btn" data-target="image">Ảnh</button>
+                    <button class="target-btn active" data-target="grid">Lưới</button>
+                    <button class="target-btn" data-target="both">Cả hai</button>
+                </div>
+
+                <!-- Panels -->
+                <div id="panels-container" class="interactive-ui">
+                    
+                    <!-- TAB ẢNH -->
+                    <div id="panel-image" class="panel">
+                        <div class="icon-row">
+                            <div class="icon-btn" onclick="app.actionCenter('image')">
+                                <svg viewBox="0 0 24 24"><path d="M12 2L12 22M2 12L22 12M5 5L19 19M19 5L5 19" stroke="currentColor" stroke-width="2"/></svg>
+                                <span>Về giữa</span>
+                            </div>
+                            <div class="icon-btn" onclick="app.actionFlip('image', 'H')">
+                                <svg viewBox="0 0 24 24"><path d="M12 2v20M8 6l-6 6 6 6V6zM16 18l6-6-6-6v12z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Lật ngang</span>
+                            </div>
+                            <div class="icon-btn" onclick="app.actionFlip('image', 'V')">
+                                <svg viewBox="0 0 24 24"><path d="M2 12h20M6 8l6-6 6 6H6zM18 16l-6 6-6-6h12z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Lật dọc</span>
+                            </div>
+                            <div class="icon-btn" onclick="app.actionRotate90('image')">
+                                <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-9-9c2.5 0 4.8 1 6.5 2.5L21 8M21 3v5h-5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Xoay 90°</span>
+                            </div>
+                            <label class="icon-btn" style="position:relative;">
+                                <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Đổi ảnh</span>
+                                <input type="file" id="hidden-file-input" accept="image/*">
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- TAB LƯỚI -->
+                    <div id="panel-grid" class="panel">
+                        <div style="font-size: 0.9rem; color: var(--accent-cyan); text-align: center; margin-bottom: 5px;">Mật độ ô mặc định: 1cm</div>
+                        <div class="paper-grid">
+                            <div class="paper-btn" data-paper="A3-V"><div class="shape a-v"></div><span>A3 Dọc</span></div>
+                            <div class="paper-btn" data-paper="A4-V"><div class="shape a-v"></div><span>A4 Dọc</span></div>
+                            <div class="paper-btn" data-paper="A5-V"><div class="shape a-v"></div><span>A5 Dọc</span></div>
+                            <div class="paper-btn" data-paper="A3-H"><div class="shape a-h"></div><span>A3 Ngang</span></div>
+                            <div class="paper-btn" data-paper="A4-H"><div class="shape a-h"></div><span>A4 Ngang</span></div>
+                            <div class="paper-btn" data-paper="A5-H"><div class="shape a-h"></div><span>A5 Ngang</span></div>
+                        </div>
+                        <div class="icon-row" style="justify-content: center; margin-top: 10px;">
+                            <div class="icon-btn danger" onclick="app.setGridOff()">
+                                <svg viewBox="0 0 24 24"><path d="M3 3l18 18M4 4h16v16H4V4z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Tắt Lưới</span>
+                            </div>
+                            <div class="icon-btn" onclick="app.actionCenter('grid')">
+                                <svg viewBox="0 0 24 24"><path d="M12 2L12 22M2 12L22 12M5 5L19 19M19 5L5 19" stroke="currentColor" stroke-width="2"/></svg>
+                                <span>Về giữa lưới</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB HIỂN THỊ -->
+                    <div id="panel-display" class="panel">
+                        <div class="slider-group">
+                            <label>Độ mờ ảnh <span id="val-opacity">100%</span></label>
+                            <input type="range" id="sl-opacity" min="0" max="100" value="100">
+                        </div>
+                        <div class="slider-group">
+                            <label>Tương phản <span id="val-contrast">100%</span></label>
+                            <input type="range" id="sl-contrast" min="50" max="200" value="100">
+                        </div>
+                        
+                        <div class="icon-row">
+                            <div class="icon-btn" id="btn-bw">
+                                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2a10 10 0 0 0 0 20z" fill="currentColor"/></svg>
+                                <span>Trắng Đen</span>
+                            </div>
+                            <div class="icon-btn" id="btn-invert">
+                                <svg viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2z" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2L2 22h10V2z" fill="currentColor"/></svg>
+                                <span>Đảo Màu</span>
+                            </div>
+                            <div class="icon-btn" id="btn-edge">
+                                <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3V3z" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                                <span>Tách Nét</span>
+                            </div>
+                        </div>
+
+                        <div class="slider-group" id="wrap-edge-thresh" style="display:none; margin-top: 10px;">
+                            <label>Ngưỡng Tách Nét (Đậm/Nhạt) <span id="val-thresh">100%</span></label>
+                            <input type="range" id="sl-thresh" min="20" max="300" value="100">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Bar Cố Định -->
+                <div id="tab-bar" class="interactive-ui">
+                    <button class="tab-btn" data-tab="image">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="none"/><circle cx="8.5" cy="8.5" r="1.5" fill="#000"/><path d="M21 15l-5-5L5 21" stroke="#000" stroke-width="2" fill="none"/></svg>
+                    </button>
+                    <button class="tab-btn" data-tab="grid">
+                        <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zM9 3v18M15 3v18M3 9h18M3 15h18" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                    </button>
+                    <button class="tab-btn" data-tab="display">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                    <button class="tab-btn" id="btn-lock">
+                        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" ry="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- 3. TRẠNG THÁI KHÓA -->
-    <button id="btn-unlock-corner" class="hidden">🔓 MỞ KHÓA</button>
-
+    <!-- === TẤT CẢ JAVASCRIPT === -->
     <script>
-        // Các DOM Elements chính
-        const video = document.getElementById('camera-feed');
-        const img = document.getElementById('tracing-image');
-        const touchArea = document.getElementById('touch-area');
-        const paperGrid = document.getElementById('paper-grid');
-        
-        const panelInit = document.getElementById('panel-init');
-        const panelAlign = document.getElementById('panel-align');
-        const btnUnlockCorner = document.getElementById('btn-unlock-corner');
-        
-        // Quản lý Trạng Thái & Biến đổi ảnh
-        let appState = 'INIT'; // INIT, ALIGN, LOCKED
-        let tx = 0, ty = 0, scale = 1, rotation = 0, flipX = 1, flipY = 1;
+        // === BIẾN TOÀN CỤC ===
+        const DOM = {
+            intro: document.getElementById('intro-screen'),
+            app: document.getElementById('app-container'),
+            video: document.getElementById('camera-view'),
+            workspace: document.getElementById('workspace'),
+            imgLayer: document.getElementById('image-layer'),
+            imgEl: document.getElementById('trace-image'),
+            gridLayer: document.getElementById('grid-layer'),
+            targetBtns: document.querySelectorAll('.target-btn'),
+            panels: document.querySelectorAll('.panel'),
+            tabBtns: document.querySelectorAll('.tab-btn[data-tab]'),
+            btnLock: document.getElementById('btn-lock'),
+            btnUnlock: document.getElementById('btn-unlock'),
+            btnEye: document.getElementById('btn-eye'),
+            paperBtns: document.querySelectorAll('.paper-btn')
+        };
 
-        // Khởi động Camera
+        let wakeLock = null;
+
+        // Trạng thái lưu trữ cấu hình hiển thị
+        const SETTINGS_KEY = 'AR_TRACING_SETTINGS';
+        const displaySettings = {
+            paper: 'A4-V', // A3/A4/A5 - V/H, hoặc 'OFF'
+            opacity: 100,
+            contrast: 100,
+            bw: false,
+            invert: false,
+            edge: false,
+            thresh: 100
+        };
+
+        // Trạng thái Transform của các Layer
+        // Transform origin là giữa màn hình (top:50%, left:50% đè bằng css transform)
+        const transforms = {
+            image: { x: 0, y: 0, scale: 1, rotation: 0, flipH: 1, flipV: 1, el: DOM.imgLayer },
+            grid:  { x: 0, y: 0, scale: 1, rotation: 0, flipH: 1, flipV: 1, el: DOM.gridLayer }
+        };
+
+        let currentTarget = 'grid'; // 'image', 'grid', 'both'
+        let isLocked = false;
+
+        // === 1. CAMERA & WAKELOCK ===
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { ideal: "environment" } },
+                    video: { facingMode: { ideal: 'environment' } },
                     audio: false
                 });
-                video.srcObject = stream;
+                DOM.video.srcObject = stream;
             } catch (err) {
-                alert("Vui lòng cấp quyền Camera và mở thông qua HTTPS.");
+                alert("Lỗi Camera: Không thể truy cập. Hãy chắc chắn bạn đang dùng HTTPS và đã cấp quyền cho Safari.");
+                console.error(err);
             }
         }
-        startCamera();
 
-        // Nạp ảnh mẫu
-        document.getElementById('image-upload').addEventListener('change', (e) => {
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                } catch (err) {
+                    console.log('Wake Lock bị từ chối:', err);
+                }
+            }
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                requestWakeLock();
+            }
+        });
+
+        // === 2. KHỞI TẠO TỪ FILE & GRID ===
+        function handleFileSelect(e) {
             const file = e.target.files[0];
-            if (file) {
-                if (img.src) URL.revokeObjectURL(img.src);
-                img.src = URL.createObjectURL(file);
-                // Reset toạ độ khi tải ảnh mới
-                tx = 0; ty = 0; scale = 1; rotation = 0; flipX = 1; flipY = 1;
-                applyTransform();
-            }
-        });
-
-        // Thanh trượt độ trong suốt
-        document.getElementById('opacity-slider').addEventListener('input', (e) => {
-            img.style.opacity = e.target.value;
-            document.getElementById('opacity-val').textContent = Math.round(e.target.value * 100) + '%';
-        });
-
-        // ==========================================
-        // UI / UX STATE MANAGER
-        // ==========================================
-        function switchState(newState) {
-            appState = newState;
-            
-            // Ẩn tất cả UI trước
-            panelInit.classList.add('hidden');
-            panelAlign.classList.add('hidden');
-            btnUnlockCorner.classList.add('hidden');
-            paperGrid.classList.remove('locked');
-            
-            if (newState === 'INIT') {
-                panelInit.classList.remove('hidden');
-                paperGrid.style.display = 'none';
-                touchArea.style.pointerEvents = 'none'; // Tắt cảm ứng ảnh
-            } 
-            else if (newState === 'ALIGN') {
-                panelAlign.classList.remove('hidden');
-                paperGrid.style.display = 'block';
-                touchArea.style.pointerEvents = 'auto'; // Bật cảm ứng vùng ảnh
-            } 
-            else if (newState === 'LOCKED') {
-                btnUnlockCorner.classList.remove('hidden');
-                paperGrid.style.display = 'block';
-                paperGrid.classList.add('locked');      // Kích hoạt viền xanh, ẩn lưới
-                touchArea.style.pointerEvents = 'none'; // Khoá cảm ứng hoàn toàn
-            }
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                DOM.imgEl.src = event.target.result;
+                DOM.intro.style.opacity = 0;
+                setTimeout(() => {
+                    DOM.intro.style.display = 'none';
+                    DOM.app.style.display = 'block';
+                    startCamera();
+                    requestWakeLock();
+                    app.applyDisplaySettings();
+                    app.renderGrid();
+                }, 300);
+            };
+            reader.readAsDataURL(file);
+            e.target.value = ''; // Reset
         }
+        document.getElementById('init-file-input').addEventListener('change', handleFileSelect);
+        document.getElementById('hidden-file-input').addEventListener('change', handleFileSelect);
 
-        // Gắn sự kiện nút chuyển trạng thái
-        document.getElementById('btn-enter-align').addEventListener('click', () => switchState('ALIGN'));
-        document.getElementById('btn-back-init').addEventListener('click', () => switchState('INIT'));
-        document.getElementById('btn-lock').addEventListener('click', () => switchState('LOCKED'));
-        btnUnlockCorner.addEventListener('click', () => switchState('ALIGN'));
+        // Kích thước chuẩn tính bằng mm
+        const PAPER_SIZES = {
+            'A3': { w: 420, h: 297 },
+            'A4': { w: 297, h: 210 },
+            'A5': { w: 210, h: 148 }
+        };
 
-        // ==========================================
-        // CÔNG CỤ CĂN CHỈNH (GRID & TRANSFORM)
-        // ==========================================
-        function applyTransform() {
-            img.style.transform = `translate(${tx}px, ${ty}px) rotate(${rotation}deg) scaleX(${scale * flipX}) scaleY(${scale * flipY})`;
-        }
+        const app = {
+            // === GRID ENGINE ===
+            renderGrid: () => {
+                if(displaySettings.paper === 'OFF') {
+                    DOM.gridLayer.innerHTML = '';
+                    return;
+                }
+                const parts = displaySettings.paper.split('-');
+                const sizeInfo = PAPER_SIZES[parts[0]];
+                let w_mm = sizeInfo.w;
+                let h_mm = sizeInfo.h;
+                if (parts[1] === 'V') { // Portrait
+                    w_mm = sizeInfo.h;
+                    h_mm = sizeInfo.w;
+                }
 
-        // Thay đổi lưới tuỳ theo khổ giấy
-        document.getElementById('paper-size-select').addEventListener('change', (e) => {
-            const selectedOption = e.target.options[e.target.selectedIndex];
-            const ratio = selectedOption.getAttribute('data-ratio');
-            const width = selectedOption.getAttribute('data-width');
-            const maxH = selectedOption.getAttribute('data-maxh');
-
-            paperGrid.style.aspectRatio = ratio;
-            paperGrid.style.width = width + '%';
-            paperGrid.style.maxHeight = maxH + 'vh';
-        });
-
-        // Trigger mặc định lúc mới load
-        document.getElementById('paper-size-select').dispatchEvent(new Event('change'));
-
-        // Xoay & Lật
-        document.getElementById('btn-rotate').addEventListener('click', () => { rotation = (rotation + 90) % 360; applyTransform(); });
-        document.getElementById('btn-flip-h').addEventListener('click', () => { flipX *= -1; applyTransform(); });
-        document.getElementById('btn-flip-v').addEventListener('click', () => { flipY *= -1; applyTransform(); });
-
-        // ==========================================
-        // TƯƠNG TÁC ĐA ĐIỂM (MOBILE SAFARI FIX)
-        // ==========================================
-        // Chặn zoom hệ thống (bảo hiểm cho iOS 15+)
-        document.addEventListener('touchmove', (e) => {
-            if(e.scale !== 1) e.preventDefault(); 
-        }, { passive: false });
-
-        let activeTouches = 0;
-        let startX = 0, startY = 0, baseTx = 0, baseTy = 0;
-        let startDist = 0, baseScale = 1;
-
-        // Tính khoảng cách giữa 2 ngón tay
-        function getDistance(t1, t2) {
-            return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-        }
-
-        // Tìm tâm điểm giữa 2 ngón tay
-        function getCenter(t1, t2) {
-            return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
-        }
-
-        touchArea.addEventListener('touchstart', (e) => {
-            if (appState !== 'ALIGN') return;
-            e.preventDefault(); 
-            activeTouches = e.touches.length;
-            
-            if (activeTouches === 1) {
-                startX = e.touches[0].clientX; startY = e.touches[0].clientY;
-                baseTx = tx; baseTy = ty;
-            } else if (activeTouches === 2) {
-                startDist = getDistance(e.touches[0], e.touches[1]);
-                baseScale = scale;
-                const center = getCenter(e.touches[0], e.touches[1]);
-                startX = center.x; startY = center.y;
-                baseTx = tx; baseTy = ty;
-            }
-        }, { passive: false });
-
-        touchArea.addEventListener('touchmove', (e) => {
-            if (appState !== 'ALIGN') return;
-            e.preventDefault(); // Chặn cuộn trang/rubber-banding
-            
-            if (activeTouches === 1 && e.touches.length === 1) {
-                // Kéo (Pan)
-                tx = baseTx + (e.touches[0].clientX - startX);
-                ty = baseTy + (e.touches[0].clientY - startY);
-            } 
-            else if (activeTouches === 2 && e.touches.length === 2) {
-                // Thu phóng (Pinch to zoom)
-                const currentDist = getDistance(e.touches[0], e.touches[1]);
-                scale = baseScale * (currentDist / startDist);
+                // Để scale chuẩn 1cm = 10mm, vẽ viewBox theo mm.
+                // Trình duyệt tự scale SVG. 1 ô lưới = 10 unit.
+                let svg = `<svg viewBox="0 0 ${w_mm} ${h_mm}" width="${w_mm * 3.78}px" height="${h_mm * 3.78}px">`;
                 
-                const center = getCenter(e.touches[0], e.touches[1]);
-                tx = baseTx + (center.x - startX);
-                ty = baseTy + (center.y - startY);
+                // Viền ngoài
+                svg += `<rect x="0" y="0" width="${w_mm}" height="${h_mm}" class="grid-outline" />`;
+                
+                // Lưới kẻ (10mm = 1cm)
+                let paths = '';
+                for (let x = 10; x < w_mm; x += 10) paths += `M${x} 0 L${x} ${h_mm} `;
+                for (let y = 10; y < h_mm; y += 10) paths += `M0 ${y} L${w_mm} ${y} `;
+                
+                if (paths !== '') {
+                    svg += `<path d="${paths}" class="grid-lines" />`;
+                }
+                svg += `</svg>`;
+                
+                // Căn tâm bằng cách dịch trái/lên một nửa kích thước bằng CSS
+                DOM.gridLayer.innerHTML = svg;
+                const svgEl = DOM.gridLayer.querySelector('svg');
+                svgEl.style.transform = `translate(-50%, -50%)`;
+            },
+            setGridOff: () => {
+                displaySettings.paper = 'OFF';
+                app.saveSettings();
+                app.updateUIStates();
+                app.renderGrid();
+            },
+
+            // === HÀNH ĐỘNG CƠ BẢN TRÊN TRANSFORM ===
+            actionCenter: (type) => {
+                transforms[type].x = 0;
+                transforms[type].y = 0;
+                updateElementTransform(transforms[type]);
+            },
+            actionFlip: (type, axis) => {
+                if(axis === 'H') transforms[type].flipH *= -1;
+                if(axis === 'V') transforms[type].flipV *= -1;
+                updateElementTransform(transforms[type]);
+            },
+            actionRotate90: (type) => {
+                transforms[type].rotation += 90;
+                updateElementTransform(transforms[type]);
+            },
+
+            // === DISPLAY SETTINGS ENGINE (BỘ LỌC ẢNH) ===
+            applyDisplaySettings: () => {
+                let filterStr = [];
+                let mixBlend = 'normal';
+
+                // Opacity xử lý trực tiếp CSS
+                DOM.imgEl.style.opacity = displaySettings.opacity / 100;
+
+                if (displaySettings.edge) {
+                    // Tách nét: Lọc bỏ nền trắng bằng multiply.
+                    // Biến đổi ảnh thành trắng đen độ tương phản cao trước
+                    filterStr.push(`grayscale(100%)`);
+                    filterStr.push(`contrast(${displaySettings.thresh}%)`);
+                    filterStr.push(`brightness(${displaySettings.thresh > 100 ? 100 + (displaySettings.thresh-100)*0.5 : displaySettings.thresh}%)`);
+                    mixBlend = 'multiply';
+                } else {
+                    if (displaySettings.bw) filterStr.push(`grayscale(100%)`);
+                    if (displaySettings.invert) filterStr.push(`invert(100%)`);
+                    if (displaySettings.contrast !== 100) filterStr.push(`contrast(${displaySettings.contrast}%)`);
+                }
+
+                DOM.imgEl.style.filter = filterStr.length > 0 ? filterStr.join(' ') : 'none';
+                DOM.imgLayer.style.mixBlendMode = mixBlend;
+                
+                // Lưu
+                app.saveSettings();
+            },
+            saveSettings: () => {
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(displaySettings));
+            },
+            loadSettings: () => {
+                const saved = localStorage.getItem(SETTINGS_KEY);
+                if (saved) {
+                    Object.assign(displaySettings, JSON.parse(saved));
+                }
+                app.updateUIStates();
+            },
+            updateUIStates: () => {
+                // Sliders
+                document.getElementById('sl-opacity').value = displaySettings.opacity;
+                document.getElementById('val-opacity').textContent = displaySettings.opacity + '%';
+                document.getElementById('sl-contrast').value = displaySettings.contrast;
+                document.getElementById('val-contrast').textContent = displaySettings.contrast + '%';
+                document.getElementById('sl-thresh').value = displaySettings.thresh;
+                document.getElementById('val-thresh').textContent = displaySettings.thresh + '%';
+
+                // Nút Bật tắt
+                document.getElementById('btn-bw').classList.toggle('active', displaySettings.bw);
+                document.getElementById('btn-invert').classList.toggle('active', displaySettings.invert);
+                document.getElementById('btn-edge').classList.toggle('active', displaySettings.edge);
+                
+                // Hiện thanh ngưỡng nếu đang tách nét
+                document.getElementById('wrap-edge-thresh').style.display = displaySettings.edge ? 'flex' : 'none';
+
+                // Nút lưới
+                DOM.paperBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.paper === displaySettings.paper);
+                });
             }
-            applyTransform();
+        };
+
+        // Khởi tạo setting
+        app.loadSettings();
+
+        // === UI BINDINGS TABS & PANELS ===
+        let activeTab = null;
+        DOM.tabBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const tab = btn.dataset.tab;
+                if (activeTab === tab) {
+                    // Đóng panel nếu click lại
+                    closeAllPanels();
+                } else {
+                    closeAllPanels();
+                    activeTab = tab;
+                    btn.classList.add('active');
+                    document.getElementById('panel-' + tab).classList.add('open');
+                }
+            });
+        });
+
+        function closeAllPanels() {
+            activeTab = null;
+            DOM.tabBtns.forEach(b => b.classList.remove('active'));
+            DOM.panels.forEach(p => p.classList.remove('open'));
+        }
+
+        // Bấm ra ngoài panel để đóng
+        DOM.workspace.addEventListener('click', (e) => {
+            if(!isLocked) closeAllPanels();
+        });
+
+        // Bấm bộ chọn đối tượng
+        DOM.targetBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                DOM.targetBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentTarget = btn.dataset.target;
+                
+                // Xử lý Glow nhận diện
+                DOM.imgLayer.classList.remove('target-active-glow');
+                DOM.gridLayer.classList.remove('target-active-glow');
+                if (currentTarget === 'image' || currentTarget === 'both') DOM.imgLayer.classList.add('target-active-glow');
+                if (currentTarget === 'grid' || currentTarget === 'both') DOM.gridLayer.classList.add('target-active-glow');
+            });
+        });
+
+        // Lưới giấy events
+        DOM.paperBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                displaySettings.paper = btn.dataset.paper;
+                app.saveSettings();
+                app.updateUIStates();
+                app.renderGrid();
+            });
+        });
+
+        // Display sliders events
+        document.getElementById('sl-opacity').addEventListener('input', (e) => {
+            displaySettings.opacity = e.target.value;
+            document.getElementById('val-opacity').textContent = e.target.value + '%';
+            app.applyDisplaySettings();
+        });
+        document.getElementById('sl-contrast').addEventListener('input', (e) => {
+            displaySettings.contrast = e.target.value;
+            document.getElementById('val-contrast').textContent = e.target.value + '%';
+            app.applyDisplaySettings();
+        });
+        document.getElementById('sl-thresh').addEventListener('input', (e) => {
+            displaySettings.thresh = e.target.value;
+            document.getElementById('val-thresh').textContent = e.target.value + '%';
+            app.applyDisplaySettings();
+        });
+
+        document.getElementById('btn-bw').addEventListener('click', () => {
+            displaySettings.bw = !displaySettings.bw;
+            app.updateUIStates(); app.applyDisplaySettings();
+        });
+        document.getElementById('btn-invert').addEventListener('click', () => {
+            displaySettings.invert = !displaySettings.invert;
+            app.updateUIStates(); app.applyDisplaySettings();
+        });
+        document.getElementById('btn-edge').addEventListener('click', () => {
+            displaySettings.edge = !displaySettings.edge;
+            app.updateUIStates(); app.applyDisplaySettings();
+        });
+
+
+        // === ẨN HIỆN UI & KHÓA ===
+        function toggleUI() {
+            if(isLocked) return;
+            document.body.classList.toggle('ui-hidden');
+            closeAllPanels();
+        }
+        DOM.btnEye.addEventListener('click', toggleUI);
+
+        // Double tap nền để toggle UI
+        let lastTap = 0;
+        DOM.workspace.addEventListener('touchend', (e) => {
+            if(e.touches.length === 0 && e.changedTouches.length === 1) {
+                const currentTime = new Date().getTime();
+                const tapLength = currentTime - lastTap;
+                if (tapLength < 300 && tapLength > 0) {
+                    toggleUI();
+                    e.preventDefault();
+                }
+                lastTap = currentTime;
+            }
+        });
+
+        function doVibrate() {
+            if ('vibrate' in navigator) navigator.vibrate(50);
+        }
+
+        DOM.btnLock.addEventListener('click', () => {
+            isLocked = true;
+            document.body.classList.add('locked');
+            closeAllPanels();
+            doVibrate();
+        });
+        DOM.btnUnlock.addEventListener('click', () => {
+            isLocked = false;
+            document.body.classList.remove('locked');
+            doVibrate();
+        });
+
+
+        // === TRANSFORM CẬP NHẬT CSS ===
+        function updateElementTransform(tState) {
+            // Transform matrix: Translate -> Scale -> Rotate -> Flip
+            // CSS apply từ phải qua trái.
+            tState.el.style.transform = `
+                translate(calc(-50% + ${tState.x}px), calc(-50% + ${tState.y}px))
+                scale(${tState.scale})
+                rotate(${tState.rotation}deg)
+                scaleX(${tState.flipH})
+                scaleY(${tState.flipV})
+            `;
+        }
+
+        function getActiveTransformStates() {
+            if (currentTarget === 'image') return [transforms.image];
+            if (currentTarget === 'grid') return [transforms.grid];
+            if (currentTarget === 'both') return [transforms.image, transforms.grid];
+            return [];
+        }
+
+
+        // =====================================================================
+        // === TRANSFORM ENGINE ĐA ĐIỂM (PAN / PINCH / ROTATE ĐỒNG THỜI) ===
+        // Yêu cầu quan trọng: Điểm neo trung điểm (Midpoint Anchoring)
+        // =====================================================================
+        
+        let isTouching = false;
+        let ticking = false; // Dùng cho requestAnimationFrame
+        
+        // Trạng thái lúc mới bắt đầu chạm
+        let initialTouches = [];
+        let initialTransformSnapshot = []; // Bản sao state của các đối tượng đang chọn
+        let initialMidpoint = { x: 0, y: 0 };
+        let initialDist = 0;
+        let initialAngle = 0;
+
+        // Hàm tiện ích hình học
+        function getMidpoint(p1, p2) {
+            return { x: (p1.clientX + p2.clientX) / 2, y: (p1.clientY + p2.clientY) / 2 };
+        }
+        function getDistance(p1, p2) {
+            return Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+        }
+        function getAngle(p1, p2) {
+            // Trả về độ (degrees)
+            return Math.atan2(p2.clientY - p1.clientY, p2.clientX - p1.clientX) * 180 / Math.PI;
+        }
+
+        DOM.workspace.addEventListener('touchstart', (e) => {
+            if(isLocked) return;
+            // Cho phép các thẻ con bên trong UI (như nút, thanh trượt) tự hoạt động
+            if (e.target.closest('.interactive-ui')) return; 
+            
+            e.preventDefault(); // Chặn default cuộn / zoom Safari
+            
+            const touches = e.touches;
+            if (touches.length === 1 || touches.length === 2) {
+                isTouching = true;
+                
+                // Lấy snapshot của các object đang được thao tác
+                const activeStates = getActiveTransformStates();
+                initialTransformSnapshot = activeStates.map(st => ({...st})); // Clone nông thủ công
+                
+                if (touches.length === 1) {
+                    initialMidpoint = { x: touches[0].clientX, y: touches[0].clientY };
+                } else if (touches.length === 2) {
+                    initialMidpoint = getMidpoint(touches[0], touches[1]);
+                    initialDist = getDistance(touches[0], touches[1]);
+                    initialAngle = getAngle(touches[0], touches[1]);
+                }
+            }
         }, { passive: false });
 
-        touchArea.addEventListener('touchend', (e) => {
-            if (appState !== 'ALIGN') return;
+        DOM.workspace.addEventListener('touchmove', (e) => {
+            if(!isTouching || isLocked) return;
+            if (e.target.closest('.interactive-ui')) return;
             e.preventDefault();
-            activeTouches = e.touches.length;
-            
-            // Xử lý bù toạ độ khi người dùng thả 1 ngón tay ra trước
-            if (activeTouches === 1) {
-                startX = e.touches[0].clientX; startY = e.touches[0].clientY;
-                baseTx = tx; baseTy = ty;
+
+            // Tối ưu hóa bằng requestAnimationFrame tránh giật lag
+            if (!ticking) {
+                // Copy touches object vì e.touches thay đổi liên tục
+                const currentTouches = [];
+                for(let i=0; i<e.touches.length; i++) {
+                    currentTouches.push({clientX: e.touches[i].clientX, clientY: e.touches[i].clientY});
+                }
+                
+                requestAnimationFrame(() => {
+                    handleTouchMoveLogic(currentTouches);
+                    ticking = false;
+                });
+                ticking = true;
             }
         }, { passive: false });
+
+        DOM.workspace.addEventListener('touchend', (e) => {
+            if (e.touches.length === 0) {
+                isTouching = false;
+            } else if (e.touches.length === 1 && isTouching) {
+                // Đổi từ 2 ngón sang 1 ngón -> reset lại neo 1 ngón
+                const activeStates = getActiveTransformStates();
+                initialTransformSnapshot = activeStates.map(st => ({...st}));
+                initialMidpoint = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+        }, { passive: false });
+        
+        DOM.workspace.addEventListener('touchcancel', () => { isTouching = false; });
+
+        // Logic Toán học xử lý (Giải thích chi tiết)
+        function handleTouchMoveLogic(touches) {
+            let currentMidpoint, scaleMultiplier = 1, rotationDelta = 0;
+
+            if (touches.length === 1) {
+                currentMidpoint = { x: touches[0].clientX, y: touches[0].clientY };
+            } else if (touches.length >= 2) {
+                currentMidpoint = getMidpoint(touches[0], touches[1]);
+                let currentDist = getDistance(touches[0], touches[1]);
+                let currentAngle = getAngle(touches[0], touches[1]);
+
+                // Ngăn chia cho 0
+                if (initialDist > 0) scaleMultiplier = currentDist / initialDist;
+                rotationDelta = currentAngle - initialAngle;
+            } else return;
+
+            // Delta tịnh tiến cơ bản do ngón tay di chuyển
+            const deltaX = currentMidpoint.x - initialMidpoint.x;
+            const deltaY = currentMidpoint.y - initialMidpoint.y;
+
+            const activeStates = getActiveTransformStates();
+
+            activeStates.forEach((state, index) => {
+                const initSt = initialTransformSnapshot[index];
+                
+                // GIẢI THÍCH TOÁN HỌC NEO TRUNG ĐIỂM (MIDPOINT ANCHORING):
+                // Vấn đề: Khi scale hoặc rotate bằng CSS, tâm biến đổi (transform-origin) mặc định là giữa vật (center center).
+                // Do đó, nếu ta dùng 2 ngón tay bóp ở rìa bức ảnh, bức ảnh sẽ phình ra từ tâm, 
+                // làm cho phần hình ảnh đang nằm ngay dưới ngón tay bị trượt đi chỗ khác ("nhảy" hình).
+                // 
+                // Giải pháp (Vector bù trừ):
+                // 1. Coi điểm neo ban đầu (initialMidpoint) là một điểm dính liền vào bức ảnh.
+                // 2. Tìm Vector V nối từ Tâm bức ảnh đến Điểm neo đó trên hệ trục tọa độ màn hình.
+                // 3. Khi ta tính toán Scale mới và Rotation mới, Vector V đó cũng sẽ bị biến đổi 
+                //    (vừa dài ra, vừa xoay) tạo thành Vector V_new.
+                // 4. Nếu ta chỉ áp dụng Delta của tay (tay vuốt đi đâu hình đi đó) + Scale mới + Rotate mới,
+                //    điểm dính dưới ngón tay sẽ bị lệch một khoảng chính bằng (V - V_new).
+                // 5. Vậy, ta cộng thêm phần bù trừ (V - V_new) vào Translation (x, y) cuối cùng. 
+                //    Lúc này, điểm dưới ngón tay sẽ hoàn toàn cố định, không hề bị trượt!
+
+                // Bước 1: Tính Vector V
+                // Tâm màn hình (vì đối tượng đang fix top:50%, left:50%)
+                const screenCX = window.innerWidth / 2;
+                const screenCY = window.innerHeight / 2;
+                // Vị trí tâm vật trên màn hình ở thời điểm bắt đầu chạm
+                const objCX = screenCX + initSt.x;
+                const objCY = screenCY + initSt.y;
+
+                // Vector từ tâm vật tới ngón tay
+                const vx = initialMidpoint.x - objCX;
+                const vy = initialMidpoint.y - objCY;
+
+                // Bước 2: Tính Scale mới và Rotation mới
+                let newScale = initSt.scale * scaleMultiplier;
+                // Giới hạn scale để tránh mất hình (từ 0.05x đến 25x)
+                newScale = Math.max(0.05, Math.min(newScale, 25));
+                const actualScaleMult = newScale / initSt.scale;
+
+                let newRotation = initSt.rotation + rotationDelta;
+
+                // Bước 3: Tính Vector V_new (V sau khi bị xoay và scale)
+                const rad = rotationDelta * Math.PI / 180;
+                const cos = Math.cos(rad);
+                const sin = Math.sin(rad);
+                
+                // Phép xoay Vector cơ bản 2D, sau đó nhân với tỷ lệ scale
+                const vNewX = (vx * cos - vy * sin) * actualScaleMult;
+                const vNewY = (vx * sin + vy * cos) * actualScaleMult;
+
+                // Bước 4: Tính sai lệch
+                const diffX = vx - vNewX;
+                const diffY = vy - vNewY;
+
+                // Bước 5: Áp dụng vị trí mới = Vị trí cũ + Delta tay + Sai lệch bù trừ
+                state.x = initSt.x + deltaX + diffX;
+                state.y = initSt.y + deltaY + diffY;
+                state.scale = newScale;
+                state.rotation = newRotation;
+
+                updateElementTransform(state);
+            });
+        }
+
+        // Cập nhật transform cho 2 lớp khi khởi chạy
+        updateElementTransform(transforms.image);
+        updateElementTransform(transforms.grid);
 
     </script>
 </body>
